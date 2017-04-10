@@ -7,15 +7,15 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #define BUFSIZE 4096
-#define USAGE "Usage: %s [-i] [-w secs] [-e cmd] timestamp filename\n"
+#define USAGE "Usage: %s [-i] [-o] [-w secs] [-e cmd] timestamp filename\n"
 
 int main(int argc, char **argv) {
-  int r, i, len, waitsecs = 0, found = 0, skipped = 0, copied = 0, onlydigits = 0, status;
+  int r, i, len, waitsecs = 0, found = 0, skipped = 0, copied = 0, onlydigits = 0, output = 0, status;
   char *timestamp, *filename, *tmpname, buf[BUFSIZE], *execcmd = NULL, *execargs[4];
   struct stat st;
   FILE *ifp, *ofp;
 
-  while ((r = getopt(argc, argv, "w:e:i")) != -1) {
+  while ((r = getopt(argc, argv, "w:e:io")) != -1) {
     switch (r) {
       case 'w':
         waitsecs = atoi(optarg);
@@ -33,6 +33,9 @@ int main(int argc, char **argv) {
         break;
       case 'i':
         onlydigits = 1;
+        break;
+      case 'o':
+        output = 1;
         break;
       default:
         fprintf(stderr, USAGE, argv[0]);
@@ -76,7 +79,10 @@ int main(int argc, char **argv) {
   len = strlen(timestamp);
   while (fgets(buf, BUFSIZE, ifp)) {
     if (!buf[0] || (buf[0] == '\n')) continue;
-    if (!found && ((onlydigits && !isdigit(buf[0])) || (strncmp(buf, timestamp, len) < 0))) skipped++;
+    if (!found && ((onlydigits && !isdigit(buf[0])) || (strncmp(buf, timestamp, len) < 0))) {
+      skipped++;
+      if (output) puts(buf);
+    }
     else {
       found = 1;
       fputs(buf, ofp);
@@ -85,7 +91,7 @@ int main(int argc, char **argv) {
   }
   fflush(ofp);
 
-  printf("Skipped %d lines, copied %d\n", skipped, copied);
+  if (!output) printf("Skipped %d lines, copied %d\n", skipped, copied);
   if (rename(tmpname, filename)) {
     fprintf(stderr, "Failed to rename %s to %s\n", tmpname, filename);
     exit(EXIT_FAILURE);
@@ -105,13 +111,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to execute -e command\n");
         exit(EXIT_FAILURE);
       default: /* PARENT */
-        printf("Subcommand launched\n");
+        if (!output) printf("Subcommand launched\n");
     }
   }
 
   for (i = 1; i <= waitsecs; i++) {
     if (waitpid(-1, &status, WNOHANG) > 0) {
-      if (WIFEXITED(status) && !WEXITSTATUS(status)) printf("Subcommand completed succesfully\n");
+      if (WIFEXITED(status) && !WEXITSTATUS(status)) {
+        if (!output) printf("Subcommand completed succesfully\n");
+      }
       else fprintf(stderr, "Subcommand failed\n");
     }
     sleep(1);
@@ -124,7 +132,7 @@ int main(int argc, char **argv) {
     }
     if (copied) {
       fflush(ofp);
-      printf("Copied an additional %d lines written %d seconds after file rename\n", copied, i);
+      if (!output) printf("Copied an additional %d lines written %d seconds after file rename\n", copied, i);
     }
   }
 
