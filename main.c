@@ -9,9 +9,30 @@
 #define BUFSIZE 4096
 #define USAGE "Usage: %s [-i] [-o] [-w secs] [-e cmd] timestamp filename\n"
 
+int testpattern(char *pattern, char *line) {
+  int i;
+  for (i = 0; pattern[i]; i++) {
+    if (!line[i]) return 0;
+    switch (pattern[i]) {
+      case 'A':
+        if (!isalpha(line[i])) return 0;
+        break;
+      case '1':
+        if (!isdigit(line[i])) return 0;
+        break;
+      case ':':
+        if (!ispunct(line[i])) return 0;
+        break;
+      default:
+        if (line[i] != pattern[i]) return 0;
+    }
+  }
+  return 1;
+}
+
 int main(int argc, char **argv) {
-  int r, i, len, waitsecs = 0, found = 0, skipped = 0, copied = 0, onlydigits = 0, output = 0, status;
-  char *timestamp, *filename, *tmpname, buf[BUFSIZE], *execcmd = NULL, *execargs[4];
+  int r, i, len, waitsecs = 0, found = 0, skipped = 0, copied = 0, checkpattern = 0, output = 0, status;
+  char *timestamp, *filename, *tmpname, buf[BUFSIZE], *execcmd = NULL, *execargs[4], *pattern;
   struct stat st;
   FILE *ifp, *ofp;
 
@@ -32,7 +53,7 @@ int main(int argc, char **argv) {
         }
         break;
       case 'i':
-        onlydigits = 1;
+        checkpattern = 1;
         break;
       case 'o':
         output = 1;
@@ -49,6 +70,17 @@ int main(int argc, char **argv) {
   }
   timestamp = argv[optind];
   filename = argv[optind+1];
+
+  if (checkpattern) {
+    pattern = (char *)malloc(strlen(timestamp+1));
+    for (i = 0; timestamp[i]; i++) {
+      if (isalpha(timestamp[i])) pattern[i] = 'A';
+      else if (isdigit(timestamp[i])) pattern[i] = '1';
+      else if (ispunct(timestamp[i])) pattern[i] = ':';
+      else pattern[i] = timestamp[i];
+    }
+    pattern[i] = '\0';
+  }
 
   if (!(ifp = fopen(filename, "re"))) { // Open mode 'e' requests O_CLOEXEC
     fprintf(stderr, "Error opening original logfile");
@@ -79,7 +111,7 @@ int main(int argc, char **argv) {
   len = strlen(timestamp);
   while (fgets(buf, BUFSIZE, ifp)) {
     if (!buf[0] || (buf[0] == '\n')) continue;
-    if (!found && ((onlydigits && !isdigit(buf[0])) || (strncmp(buf, timestamp, len) < 0))) {
+    if (!found && ((checkpattern && !testpattern(pattern, buf)) || (strncmp(buf, timestamp, len) < 0))) {
       skipped++;
       if (output) puts(buf);
     }
