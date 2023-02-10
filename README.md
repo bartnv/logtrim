@@ -33,3 +33,6 @@ alignments so may not work for a logfile with random contents.
     -e subcommand
           Execute <subcommand> once the new logfile is in place. This can be
           used to signal daemon processes to reopen their logfiles.
+
+    -o    Write the skipped lines (those before the cutoff timestamp) to stdout.
+          This option disables the normal informational output.
