@@ -1,5 +1,5 @@
-logtrunc: main.c
-	gcc -o logtrunc -g -Wall -Wextra main.c
+logtrim: main.c
+	gcc -o logtrim -g -Wall -Wextra main.c
 
 install:
-	cp logtrunc /usr/local/bin
+	cp logtrim /usr/local/bin
