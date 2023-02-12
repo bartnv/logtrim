@@ -7,7 +7,13 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #define BUFSIZE 4096
-#define USAGE "Usage: %s [-i] [-o] [-w secs] [-e cmd] timestamp filename\n"
+#define USAGE "Usage: %s [-i] [-o] [-w secs] [-e cmd] timestamp filename...\n"
+
+typedef struct {
+  char *name;
+  FILE *ifp;
+  FILE *ofp;
+} input;
 
 int testpattern(char *pattern, char *line) {
   int i;
@@ -31,12 +37,11 @@ int testpattern(char *pattern, char *line) {
 }
 
 int main(int argc, char **argv) {
-  int r, i, len, waitsecs = 0, found = 0, skipped = 0, copied = 0, checkpattern = 0, output = 0, status;
-  char *timestamp, *filename, *tmpname, buf[BUFSIZE], *execcmd = NULL, *execargs[4], *pattern;
+  int r, i, w, len, waitsecs = 0, found, skipped, copied, checkpattern = 0, output = 0, status;
+  char *timestamp, *tmpname, buf[BUFSIZE], *execcmd = NULL, *execargs[4], *pattern, *suffix = NULL, *savename;
   struct stat st;
-  FILE *ifp, *ofp;
 
-  while ((r = getopt(argc, argv, "w:e:io")) != -1) {
+  while ((r = getopt(argc, argv, "w:e:s:io")) != -1) {
     switch (r) {
       case 'w':
         waitsecs = atoi(optarg);
@@ -48,6 +53,13 @@ int main(int argc, char **argv) {
       case 'e':
         execcmd = optarg;
         if (!execcmd) {
+          fprintf(stderr, USAGE, argv[0]);
+          exit(EXIT_FAILURE);
+        }
+        break;
+      case 's':
+        suffix = optarg;
+        if (!suffix) {
           fprintf(stderr, USAGE, argv[0]);
           exit(EXIT_FAILURE);
         }
@@ -69,7 +81,13 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
   timestamp = argv[optind];
-  filename = argv[optind+1];
+
+  input *inputs[argc-optind+1];
+  for (i = 0; optind+i+1 < argc; i++) {
+    inputs[i] = (input *)malloc(sizeof(input));
+    inputs[i]->name = argv[optind+i+1];
+  }
+  inputs[i] = NULL;
 
   if (checkpattern) {
     pattern = (char *)malloc(strlen(timestamp+1));
@@ -82,51 +100,70 @@ int main(int argc, char **argv) {
     pattern[i] = '\0';
   }
 
-  if (!(ifp = fopen(filename, "re"))) { // Open mode 'e' requests O_CLOEXEC
-    fprintf(stderr, "Error opening original logfile");
-    exit(-1);
-  }
+  for (i = 0; inputs[i]; i++) {
+    found = skipped = copied = 0;
+    input *input = inputs[i];
+    char *filename = input->name;
+    FILE *sfp;
 
-  tmpname = (char *)malloc(strlen(filename+5));
-  strcpy(tmpname, filename);
-  strcat(tmpname, ".tmp");
-  if (!(ofp = fopen(tmpname, "we"))) {
-    fprintf(stderr, "Error opening new logfile");
-    exit(-1);
-  }
-
-  if (fstat(fileno(ifp), &st)) {
-    fprintf(stderr, "Error stat()'ing original logfile");
-    exit(-1);
-  }
-  if (fchmod(fileno(ofp), st.st_mode)) {
-    fprintf(stderr, "Error setting permissions on new logfile");
-    exit(-1);
-  }
-  if (fchown(fileno(ofp), st.st_uid, st.st_gid)) {
-    fprintf(stderr, "Error setting ownership on new logfile");
-    exit(-1);
-  }
-
-  len = strlen(timestamp);
-  while (fgets(buf, BUFSIZE, ifp)) {
-    if (!buf[0] || (buf[0] == '\n')) continue;
-    if (!found && ((checkpattern && !testpattern(pattern, buf)) || (strncmp(buf, timestamp, len) < 0))) {
-      skipped++;
-      if (output) puts(buf);
+    if (!(input->ifp = fopen(filename, "re"))) { // Open mode 'e' requests O_CLOEXEC
+      fprintf(stderr, "Error opening original file %s\n", filename);
+      exit(EXIT_FAILURE);
     }
-    else {
-      found = 1;
-      fputs(buf, ofp);
-      copied++;
-    }
-  }
-  fflush(ofp);
 
-  if (!output) printf("Skipped %d lines, copied %d\n", skipped, copied);
-  if (rename(tmpname, filename)) {
-    fprintf(stderr, "Failed to rename %s to %s\n", tmpname, filename);
-    exit(EXIT_FAILURE);
+    tmpname = (char *)malloc(strlen(filename+5));
+    strcpy(tmpname, filename);
+    strcat(tmpname, ".tmp");
+    if (!(input->ofp = fopen(tmpname, "we"))) {
+      fprintf(stderr, "Error opening temporary file %s\n", tmpname);
+      exit(EXIT_FAILURE);
+    }
+
+    if (fstat(fileno(input->ifp), &st)) {
+      fprintf(stderr, "Error stat()'ing original file %s\n", filename);
+      exit(EXIT_FAILURE);
+    }
+    if (fchmod(fileno(input->ofp), st.st_mode)) {
+      fprintf(stderr, "Error setting permissions on new file %s\n", tmpname);
+      exit(EXIT_FAILURE);
+    }
+    if (fchown(fileno(input->ofp), st.st_uid, st.st_gid)) {
+      fprintf(stderr, "Error setting ownership on new file %s\n", tmpname);
+      exit(EXIT_FAILURE);
+    }
+
+    if (suffix) {
+      savename = (char *)malloc(strlen(filename)+strlen(suffix)+1);
+      strcpy(savename, filename);
+      strcat(savename, suffix);
+      if (!(sfp = fopen(savename, "ae"))) {
+        fprintf(stderr, "Error opening save file %s\n", savename);
+        exit(EXIT_FAILURE);
+      }
+    }
+
+    len = strlen(timestamp);
+    while (fgets(buf, BUFSIZE, input->ifp)) {
+      if (!buf[0] || (buf[0] == '\n')) continue;
+      if (!found && ((checkpattern && !testpattern(pattern, buf)) || (strncmp(buf, timestamp, len) < 0))) {
+        skipped++;
+        if (suffix) fputs(buf, sfp);
+        else if (output) puts(buf);
+      }
+      else {
+        found = 1;
+        fputs(buf, input->ofp);
+        copied++;
+      }
+    }
+    if (suffix) fclose(sfp);
+    fflush(input->ofp);
+
+    if (rename(tmpname, filename)) {
+      fprintf(stderr, "Failed to rename %s to %s\n", tmpname, filename);
+      exit(EXIT_FAILURE);
+    }
+    if (!output) printf("Processed %s: %d lines %s, %d lines kept\n", filename, skipped, suffix?"saved":"removed", copied);
   }
 
   if (execcmd) {
@@ -147,7 +184,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  for (i = 1; i <= waitsecs; i++) {
+  for (w = 1; w <= waitsecs; w++) {
     if (waitpid(-1, &status, WNOHANG) > 0) {
       if (WIFEXITED(status) && !WEXITSTATUS(status)) {
         if (!output) printf("Subcommand completed succesfully\n");
@@ -155,16 +192,21 @@ int main(int argc, char **argv) {
       else fprintf(stderr, "Subcommand failed\n");
     }
     sleep(1);
-    copied = 0;
-    while (fgets(buf, BUFSIZE, ifp)) {
-      if (!buf[0] || (buf[0] == '\n')) continue;
-      fseek(ofp, 0, SEEK_END);
-      fputs(buf, ofp);
-      copied++;
-    }
-    if (copied) {
-      fflush(ofp);
-      if (!output) printf("Copied an additional %d lines written %d seconds after file rename\n", copied, i);
+
+    for (i = 0; inputs[i]; i++) {
+      input *input = inputs[i];
+      copied = 0;
+      clearerr(input->ifp);
+      while (fgets(buf, BUFSIZE, input->ifp)) {
+        if (!buf[0] || (buf[0] == '\n')) continue;
+        fseek(input->ofp, 0, SEEK_END);
+        fputs(buf, input->ofp);
+        copied++;
+      }
+      if (copied) {
+        fflush(input->ofp);
+        if (!output) printf("Copied an additional %d lines written to old %s %d seconds after file rename\n", copied, input->name, w);
+      }
     }
   }
 
